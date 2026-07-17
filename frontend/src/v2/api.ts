@@ -173,9 +173,10 @@ export const v2Api = {
       const record = asRecord(item);
       const instance = normalizeInstance(record);
       const context = instance.context ?? {};
+      const metadata = asRecord(record['metadata']);
       return {
         workflowInstanceId: instance.workflowInstanceId,
-        title: first<string>(record, 'title') ?? first<string>(context, 'title'),
+        title: first<string>(record, 'title') ?? first<string>(metadata, 'title') ?? first<string>(context, 'title'),
         status: first<string>(record, 'status') ?? instance.definitionVersionStatus,
         currentNode: instance.currentNode,
         assignee: first<string | null>(record, 'assignee', 'assigneePrincipalId', 'assignee_principal_id')

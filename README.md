@@ -27,8 +27,25 @@ ADC V2 **不拥有** Requirement 数据库、Task、Report、Review、Project、
 - **后端**: Node.js 22+, TypeScript, Express, Zod
 - **前端**: React 18+, TypeScript, Ant Design, React Router
 - **工作流**: svc-workflow (HTTP API 唯一权威)
-- **认证**: Bearer Token → svc-workflow (JWT sub 决定 Actor)
+- **认证**: Direct Bearer Token Proxy（见下方认证说明）
 - **数据库**: 无本地业务数据库
+
+## 认证说明
+
+当前认证模式为 **Direct Bearer Token Proxy**：
+
+1. Browser 持有用户的 JWT Bearer Token
+2. ADC V2 Backend 从 `Authorization` header 提取 Token
+3. Token 被**原样转发**给 svc-workflow
+4. svc-workflow 验证 JWT 签名、声明（`sub`、`workflow.read` scope 等）
+5. Actor 身份完全由 svc-workflow 验证后的 JWT `sub` 决定
+
+**ADC 不执行 OBO token 交换。** 当前方案仅适合开发 / 受控 Canary 环境：
+
+- Token 存储在浏览器 `localStorage`
+- 无自动过期刷新
+- 无正式 OAuth/OIDC 登录流程
+- 正式多人 / 生产认证尚未完成（需 OBO + JWKS 或等价方案）
 
 ## 快速开始
 

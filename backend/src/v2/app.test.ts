@@ -202,7 +202,7 @@ describe('ADC V2 no-authority adapter', () => {
         priority: 'P1',
         title: 'Direct workflow item',
         description: 'No local Requirement is created.',
-        acceptanceCriteria: ['SVC is the only authority'],
+        acceptanceCriteria: 'SVC is the only authority',
         references: [{ type: 'git_commit', uri: 'git://repo/commit', digest: 'sha256:abc' }],
       },
     });
