@@ -104,7 +104,7 @@ export function createV2App(dependencies: V2AppDependencies) {
       ...(body.additionalContext ?? {}),
       title: body.title,
       description: body.description,
-      acceptanceCriteria: body.acceptanceCriteria,
+      acceptanceCriteria: body.acceptanceCriteria.join('\n'),
       references: body.references,
     } satisfies JsonValue;
     const result = await gatewayFactory(token).create({

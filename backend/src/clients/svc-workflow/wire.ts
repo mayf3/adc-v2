@@ -256,9 +256,20 @@ const timelineWireSchema = z
   })
   .strict();
 
+// AssignedWorkItem from svc-workflow. Each item wraps a full detail payload.
+const assignedWorkItemWireSchema = z
+  .object({
+    detail: fullDetailWireSchema.shape.detail,
+    upstream_submissions: z.array(z.unknown()),
+    return_feedback_events: z.array(z.unknown()),
+    submissions_truncated: z.boolean(),
+    return_events_truncated: z.boolean(),
+  })
+  .strict();
+
 const worklistWireSchema = z
   .object({
-    items: z.array(workflowInstanceSummaryWireSchema),
+    items: z.array(assignedWorkItemWireSchema),
     next_cursor: z.string().nullable(),
   })
   .strict();
@@ -434,7 +445,21 @@ export function parseTimelineResponse(value: unknown): WorkflowTimelinePage {
 export function parseWorklistResponse(value: unknown): WorklistPage {
   const parsed = worklistWireSchema.parse(value);
   return {
-    items: parsed.items.map(mapInstance),
+    items: parsed.items.map((item) => {
+      const instance = mapInstance(item.detail.instance);
+      // Enrich with title from context payload for frontend display
+      const payload = item.detail.current_context.payload;
+      const title = typeof payload === 'object' && payload !== null && !Array.isArray(payload)
+        ? (payload as Record<string, unknown>).title
+        : undefined;
+      return {
+        ...instance,
+        metadata: {
+          ...(instance.metadata as Record<string, unknown> ?? {}),
+          title: typeof title === 'string' ? title : undefined,
+        } as never,
+      };
+    }),
     nextCursor: parsed.next_cursor,
   };
 }
