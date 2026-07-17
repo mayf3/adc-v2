@@ -256,20 +256,23 @@ const timelineWireSchema = z
   })
   .strict();
 
-// AssignedWorkItem from svc-workflow. Each item wraps a full detail payload.
-const assignedWorkItemWireSchema = z
+// svc-workflow returns two worklist item shapes:
+//
+//   AssignedWorkItem { detail, upstream_submissions, return_feedback_events,
+//                       submissions_truncated, return_events_truncated }
+//   CreatorDraftItem { detail, context_editable, combined_executable }
+//
+// Both share the same `detail: FullWorkflowInstanceDetail` which is all the
+// V2 client extracts, so we accept either variant via `.passthrough()`.
+const worklistItemWireSchema = z
   .object({
     detail: fullDetailWireSchema.shape.detail,
-    upstream_submissions: z.array(z.unknown()),
-    return_feedback_events: z.array(z.unknown()),
-    submissions_truncated: z.boolean(),
-    return_events_truncated: z.boolean(),
   })
-  .strict();
+  .passthrough();
 
 const worklistWireSchema = z
   .object({
-    items: z.array(assignedWorkItemWireSchema),
+    items: z.array(worklistItemWireSchema),
     next_cursor: z.string().nullable(),
   })
   .strict();
