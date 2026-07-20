@@ -14,6 +14,7 @@ describe('loadWorkflowSdkFeatureFlags', () => {
     expect(flags.realOboEnabled).toBe(false);
     expect(flags.authV1ResourceServerEnabled).toBe(false);
     expect(flags.writeEnabled).toBe(false);
+    expect(flags.oboReadCanaryEnabled).toBe(false);
   });
 
   it('leaves defaults as false when env vars are falsy', () => {
@@ -22,6 +23,7 @@ describe('loadWorkflowSdkFeatureFlags', () => {
       ADC_WORKFLOW_REAL_OBO_ENABLED: 'false',
       ADC_AUTH_V1_RESOURCE_SERVER_ENABLED: 'no',
       ADC_WORKFLOW_WRITE_ENABLED: 'off',
+      ADC_WORKFLOW_OBO_READ_CANARY_ENABLED: '0',
     });
     expect(flags.sdkV1Enabled).toBe(false);
     expect(flags.realOboEnabled).toBe(false);
