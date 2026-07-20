@@ -1,6 +1,11 @@
 import 'dotenv/config';
 import { z } from 'zod';
 
+import {
+  loadWorkflowSdkFeatureFlags,
+  type WorkflowSdkFeatureFlags,
+} from './workflow/feature-flags.js';
+
 const definitionBindingSchema = z
   .object({
     scenarioKey: z.string().regex(/^[a-z][a-z0-9-]{0,63}$/),
@@ -21,6 +26,8 @@ export interface V2Config {
   readonly svcWorkflowRequestTimeoutMs: number;
   readonly svcWorkflowMaxAttempts: number;
   readonly definitionBindings: readonly V2DefinitionBinding[];
+  /** Workflow SDK feature flags (all default-off, fail-closed). */
+  readonly workflowFeatureFlags: WorkflowSdkFeatureFlags;
 }
 
 const sourceSchema = z.object({
@@ -63,6 +70,8 @@ export function loadV2Config(source: NodeJS.ProcessEnv = process.env): V2Config 
     throw new Error('ADC_V2_FRONTEND_ORIGINS is required in production');
   }
 
+  const workflowFeatureFlags = loadWorkflowSdkFeatureFlags(source);
+
   return {
     nodeEnv: parsed.NODE_ENV,
     port: parsed.ADC_V2_PORT,
@@ -71,5 +80,6 @@ export function loadV2Config(source: NodeJS.ProcessEnv = process.env): V2Config 
     svcWorkflowRequestTimeoutMs: parsed.SVC_WORKFLOW_REQUEST_TIMEOUT_MS,
     svcWorkflowMaxAttempts: parsed.SVC_WORKFLOW_MAX_ATTEMPTS,
     definitionBindings,
+    workflowFeatureFlags,
   };
 }

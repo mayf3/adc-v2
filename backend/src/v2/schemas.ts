@@ -1,6 +1,5 @@
+import { jsonValueSchema } from '@workflow-foundation/sdk';
 import { z } from 'zod';
-
-import { jsonValueSchema } from '../clients/svc-workflow/wire.js';
 
 export const workflowInstanceIdSchema = z.string().uuid();
 
