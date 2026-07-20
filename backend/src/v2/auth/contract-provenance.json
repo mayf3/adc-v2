@@ -1,72 +1,26 @@
 {
-  "description": "Auth V1 Contract provenance lock — pins immutable contract sources for ADC V2 Auth/OBO implementation",
-  "pinned_at": "2026-07-20T17:05:00Z",
-
-  "contract_docs": {
-    "repository": "ssh://root@8.163.44.127/opt/git/auth-service.git",
-    "head": "c935528019c29480ac9a2eb1d7e5dfb81bd8a469",
-    "tree": "cf0780b3d50f93bbea9574cf43ad8329fe4f4dd4",
-    "branch": "docs/workflow-identity-contract-alignment-v0",
-    "files": {
-      "WORKFLOW_RS256_MACHINE_TOKEN_JWKS_V0.md": {
-        "path": "docs/contracts/WORKFLOW_RS256_MACHINE_TOKEN_JWKS_V0.md",
-        "sha256": "cc68908fcd2d660eb6e78ceafec82641dc1d64cada87ab3ef299994083b084d2",
-        "coverage": ["Direct Access Token Claims", "JWKS format", "RS256 algorithm", "kid format", "Scope definitions (workflow.read, workflow.execute)"]
-      },
-      "MACHINE_CLIENT_CREDENTIALS_V0.md": {
-        "path": "docs/contracts/MACHINE_CLIENT_CREDENTIALS_V0.md",
-        "sha256": "d9f3fcf9078de80fc589a78dd5d2818338d86a1c8614859c291391c3795e9271",
-        "coverage": ["Client credentials format", "Token endpoint"]
-      },
-      "ADC_SVC_WORKFLOW_OBO_JWKS_IMPLEMENTATION_CONTRACT.md": {
-        "path": "ADC_SVC_WORKFLOW_OBO_JWKS_IMPLEMENTATION_CONTRACT.md",
-        "sha256": "d7319e1e1055b5640e3df3ef758313c002fc347864c92444fd973f5875f4625a",
-        "coverage": ["RFC 8693 Token Exchange request/response", "OBO token claims (act.sub, azp)", "Scope intersection rules", "TTL bounds", "Subject token profile checks"]
-      }
+  "schema": "adc-auth-contract-provenance-manifest-v1",
+  "source_repository": "ssh://root@8.163.44.127/opt/git/auth-service.git",
+  "source_head": "c935528019c29480ac9a2eb1d7e5dfb81bd8a469",
+  "source_tree": "cf0780b3d50f93bbea9574cf43ad8329fe4f4dd4",
+  "contracts": [
+    {
+      "path": "ADC_SVC_WORKFLOW_OBO_JWKS_IMPLEMENTATION_CONTRACT.md",
+      "git_blob_id": "41f48343fde71ad0b8c5ac750259ca2418508406",
+      "file_sha256": "d7319e1e1055b5640e3df3ef758313c002fc347864c92444fd973f5875f4625a",
+      "covers": ["rfc8693_token_exchange", "workflow_obo"]
     },
-    "bundle_digest": "463023e3780c1c8389336e0e8b43ebd8172ceac321a94b37bada527e22abb663"
-  },
-
-  "implementation_reference": {
-    "description": "auth-service reference implementation that enacts the contracts above",
-    "repository": "ssh://root@8.163.44.127/opt/git/auth-service.git",
-    "jwks_signer": {
-      "head": "672367426f927681b31c4afb6ac3e79174e65689",
-      "tree": "c29c20e9649cbe92064acdd22401ab31ca0e1f85",
-      "branch": "feat/workflow-jwks-signer-v0",
-      "key_files": {
-        "src/lib/oauth/workflow-signer.ts": "f752df01765e863dee3fe8cf04c0eeaf6a6dd148de59905997fc345e05329201",
-        "src/lib/oauth/workflow-keyring.ts": "f0ac9061fe3a753793706951f049103a6dfa6483b0628e536bc2a66cac314037",
-        "src/routes/well-known.ts": "76ece057fd964d066eb06e1db4b808094dd83c66112fca249d36d02ce90abeb1"
-      }
+    {
+      "path": "docs/contracts/MACHINE_CLIENT_CREDENTIALS_V0.md",
+      "git_blob_id": "a4405e44132cc02c9505f839712c09ff386ea145",
+      "file_sha256": "d9f3fcf9078de80fc589a78dd5d2818338d86a1c8614859c291391c3795e9271",
+      "covers": ["machine_client_credentials"]
     },
-    "obo_token_exchange": {
-      "head": "b4b23d0bfe3cfae9b440e53864be682bb71140eb",
-      "tree": "85fbfce15a1d2db34cbedb90938cb4a8358ef068",
-      "branch": "feat/workflow-agent-obo-token-exchange-v0",
-      "key_files": {
-        "src/lib/oauth/token-exchange.ts": "9e9a18e2c4aed0caa7fecf5069d77036f8166049942f5b0d8f9a42215d136cb1",
-        "src/routes/oauth.ts": "b9d539a8cfa09e4299f4994624fff20b6c40edcb394c2e0de981b2292fbbded3"
-      }
+    {
+      "path": "docs/contracts/WORKFLOW_RS256_MACHINE_TOKEN_JWKS_V0.md",
+      "git_blob_id": "7ad470edf0158a725148a3b1149b5a1cc79a8769",
+      "file_sha256": "cc68908fcd2d660eb6e78ceafec82641dc1d64cada87ab3ef299994083b084d2",
+      "covers": ["jwks_rs256", "direct_access_token"]
     }
-  },
-
-  "contract_values": {
-    "algorithm": "RS256",
-    "jwks_kid_format": "key-v1-<YYYYMMDD>",
-    "issuer": "auth-service",
-    "inbound_audience": "adc-v2",
-    "inbound_required_scope": "adc.read",
-    "inbound_required_token_use": "access",
-    "inbound_required_principal_type": "agent",
-    "obo_target_audience": "svc-workflow",
-    "obo_requested_scope": "workflow.read",
-    "obo_max_ttl_seconds": 300,
-    "obo_token_use": "workflow_obo",
-    "obo_grant_type": "urn:ietf:params:oauth:grant-type:token-exchange",
-    "obo_subject_token_type": "urn:ietf:params:oauth:token-type:access_token",
-    "obo_requested_token_type": "urn:ietf:params:oauth:token-type:access_token",
-    "obo_expected_token_type": "Bearer",
-    "obo_expected_issued_token_type": "urn:ietf:params:oauth:token-type:access_token"
-  }
+  ]
 }
