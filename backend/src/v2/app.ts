@@ -10,13 +10,8 @@ import express, {
 } from 'express';
 import { ZodError } from 'zod';
 
-import {
-  WorkflowApiError,
-  WorkflowConfigurationError,
-  WorkflowProtocolError,
-  WorkflowTransportError,
-} from '../clients/svc-workflow/errors.js';
-import type { JsonValue } from '../clients/svc-workflow/contracts.js';
+import { WorkflowError } from '@workflow-foundation/sdk';
+
 import { bearerFromRequest } from './auth/request-principal.js';
 import type { V2Config } from './config.js';
 import { DefinitionBindingRegistry } from './definitions/bindings.js';
@@ -33,6 +28,7 @@ import {
   createV2WorkflowGatewayFactory,
   type V2WorkflowGatewayFactory,
 } from './svc-workflow/gateway.js';
+import { WorkflowWriteDisabledError } from './workflow/feature-flags.js';
 
 interface V2AppDependencies {
   config: V2Config;
@@ -93,6 +89,11 @@ export function createV2App(dependencies: V2AppDependencies) {
   }));
 
   app.post('/api/v2/workflow-instances', asyncHandler(async (req, res) => {
+    // Write gating: fail-closed before any SDK call
+    if (!config.workflowFeatureFlags.writeEnabled) {
+      throw new V2HttpError(503, 'ADC_WORKFLOW_WRITE_DISABLED', 'Workflow write operations are disabled');
+    }
+
     const token = bearerFromRequest(req);
     const idempotencyKey = parseIdempotencyKey(req.get('idempotency-key'));
     const body = createWorkflowSchema.parse(req.body);
@@ -106,7 +107,7 @@ export function createV2App(dependencies: V2AppDependencies) {
       description: body.description,
       acceptanceCriteria: body.acceptanceCriteria.join('\n'),
       references: body.references,
-    } satisfies JsonValue;
+    };
     const result = await gatewayFactory(token).create({
       domainId: binding.domainId,
       definitionVersionId: binding.definitionVersionId,
@@ -136,6 +137,11 @@ export function createV2App(dependencies: V2AppDependencies) {
   }));
 
   app.post('/api/v2/workflow-instances/:workflowInstanceId/transitions', asyncHandler(async (req, res) => {
+    // Write gating: fail-closed before any SDK call
+    if (!config.workflowFeatureFlags.writeEnabled) {
+      throw new V2HttpError(503, 'ADC_WORKFLOW_WRITE_DISABLED', 'Workflow write operations are disabled');
+    }
+
     const token = bearerFromRequest(req);
     const workflowInstanceId = workflowInstanceIdSchema.parse(req.params.workflowInstanceId);
     const idempotencyKey = parseIdempotencyKey(req.get('idempotency-key'));
@@ -153,43 +159,43 @@ export function createV2App(dependencies: V2AppDependencies) {
 function errorHandler(config: V2Config, requestIds: WeakMap<Request, string>): ErrorRequestHandler {
   return (error: unknown, req: Request, res: Response, _next: NextFunction) => {
     const rid = String(requestIds.get(req) ?? '');
+
+    // Zod validation errors
     if (error instanceof ZodError) {
       return res.status(400).json({
         error: { code: 'invalid_request', message: 'Request validation failed', details: error.flatten() },
         requestId: rid,
       });
     }
+
+    // ADC V2 HTTP errors (includes mapped SDK errors from gateway)
     if (error instanceof V2HttpError) {
       return res.status(error.status).json({
         error: { code: error.code, message: error.message, details: error.details },
         requestId: rid,
       });
     }
-    if (error instanceof WorkflowApiError) {
-      if (error.upstreamRequestId) res.setHeader('x-upstream-request-id', error.upstreamRequestId);
-      return res.status(error.status).json({
-        error: { code: error.code, message: error.message, details: error.details },
+
+    // SDK WorkflowError (direct — not yet mapped by gateway)
+    if (error instanceof WorkflowError) {
+      const wfErr = error as WorkflowError & { status?: number; code?: string };
+      const status = wfErr.status ?? 502;
+      const code = wfErr.code ?? 'svc_workflow_error';
+      return res.status(status).json({
+        error: { code, message: error.message },
         requestId: rid,
       });
     }
-    if (error instanceof WorkflowTransportError) {
+
+    // Workflow write disabled error
+    if (error instanceof WorkflowWriteDisabledError) {
       return res.status(503).json({
-        error: { code: 'svc_workflow_unavailable', message: 'svc-workflow is unavailable' },
+        error: { code: error.code, message: error.message },
         requestId: rid,
       });
     }
-    if (error instanceof WorkflowProtocolError) {
-      return res.status(502).json({
-        error: { code: 'svc_workflow_protocol_error', message: 'svc-workflow returned an invalid response' },
-        requestId: rid,
-      });
-    }
-    if (error instanceof WorkflowConfigurationError) {
-      return res.status(500).json({
-        error: { code: 'workflow_client_configuration_error', message: 'Workflow client configuration is invalid' },
-        requestId: rid,
-      });
-    }
+
+    // Client HTTP errors (malformed request, etc.)
     if (isClientHttpError(error)) {
       const status = error.status;
       return res.status(status).json({
@@ -200,6 +206,7 @@ function errorHandler(config: V2Config, requestIds: WeakMap<Request, string>): E
         requestId: rid,
       });
     }
+
     console.error(`[adc-v2:${rid}] unhandled error`, error);
     return res.status(500).json({
       error: {
@@ -219,4 +226,3 @@ function isClientHttpError(error: unknown): error is { status: number } {
   const status = (error as { status?: unknown }).status;
   return typeof status === 'number' && Number.isInteger(status) && status >= 400 && status < 500;
 }
-
