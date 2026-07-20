@@ -32,7 +32,7 @@ const config: V2Config = {
   }],
   workflowFeatureFlags: {
     sdkV1Enabled: false,
-    realOboEnabled: true, // enable for tests to allow direct bearer pass-through
+    realOboEnabled: false, // must not forward inbound Authorization; fail-closed
     authV1ResourceServerEnabled: false,
     writeEnabled: true, // enable write for create/transition tests
   },
