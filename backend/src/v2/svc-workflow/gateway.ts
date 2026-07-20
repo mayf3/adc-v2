@@ -17,7 +17,7 @@ import {
   type WorkflowBearerTokenProvider,
   type WorkflowScope,
   DisabledWorkflowTokenProvider,
-  DeprecatedDirectBearerProvider,
+  UpstreamBlockedTokenProvider,
 } from '../workflow/token-provider.js';
 
 // ---------------------------------------------------------------------------
@@ -88,11 +88,17 @@ export function createV2WorkflowGatewayFactory(config: {
 }): V2WorkflowGatewayFactory {
   return (accessToken: string) => {
     // Determine the token provider for this request.
-    // When real OBO is enabled (dev/deprecated), use the direct bearer pass-through.
-    // When disabled (default), use a fail-closed provider.
+    // REAL_OBO_PROVIDER_IMPLEMENTED=false — no production OBO provider exists.
+    //
+    // realOboEnabled=false → DisabledWorkflowTokenProvider (fail-closed).
+    // realOboEnabled=true  → UpstreamBlockedTokenProvider (fail-closed with
+    //                        clear "upstream not ready" error).
+    //
+    // Both paths are fail-closed.  No path selects DeprecatedDirectBearerProvider
+    // (which would forward the inbound Authorization token to svc-workflow).
     const tokenProvider: WorkflowBearerTokenProvider =
       config.workflowFeatureFlags.realOboEnabled
-        ? new DeprecatedDirectBearerProvider()
+        ? new UpstreamBlockedTokenProvider()
         : new DisabledWorkflowTokenProvider();
 
     const scope: WorkflowScope = 'workflow.read';
@@ -221,7 +227,31 @@ function createGatewayFromClient(client: WorkflowClient): V2WorkflowGateway {
 // ---------------------------------------------------------------------------
 
 function toV2HttpError(error: unknown): never {
-  // Token provider errors — fail-closed (503)
+  // SDK WorkflowError — may wrap a token provider error as cause
+  if (error instanceof WorkflowError) {
+    // Check if the cause is a token provider error (our Disabled or Blocked provider)
+    const cause = (error as { cause?: unknown }).cause;
+    if (
+      cause &&
+      typeof cause === 'object' &&
+      (cause as { name?: string }).name === 'WorkflowTokenError'
+    ) {
+      const tokenErr = cause as { code?: string; message?: string };
+      throw new V2HttpError(
+        503,
+        tokenErr.code ?? 'ADC_WORKFLOW_TOKEN_UNAVAILABLE',
+        tokenErr.message ?? 'Workflow token is unavailable',
+      );
+    }
+
+    // Other SDK errors (API responses, transport, protocol)
+    const status = (error as { status?: number }).status ?? 502;
+    const code = (error as { code?: string }).code ?? 'svc_workflow_error';
+    const message = error.message ?? 'svc-workflow returned an error';
+    throw new V2HttpError(status, code, message);
+  }
+
+  // Direct token provider errors (not wrapped by SDK — defensive)
   if (
     typeof error === 'object' &&
     error !== null &&
@@ -233,14 +263,6 @@ function toV2HttpError(error: unknown): never {
       tokenErr.code ?? 'ADC_WORKFLOW_TOKEN_UNAVAILABLE',
       tokenErr.message ?? 'Workflow token is unavailable',
     );
-  }
-
-  // SDK WorkflowError — map to V2HttpError
-  if (error instanceof WorkflowError) {
-    const status = (error as { status?: number }).status ?? 502;
-    const code = (error as { code?: string }).code ?? 'svc_workflow_error';
-    const message = error.message ?? 'svc-workflow returned an error';
-    throw new V2HttpError(status, code, message);
   }
 
   // Unknown — rethrow for global handler
