@@ -14,6 +14,8 @@ export interface WorkflowSdkFeatureFlags {
   readonly authV1ResourceServerEnabled: boolean;
   /** Write operations (create, transition). Default false. */
   readonly writeEnabled: boolean;
+  /** OBO read-only canary (worklist + detail via real OBO). Default false. */
+  readonly oboReadCanaryEnabled: boolean;
 }
 
 export const WORKFLOW_SDK_FEATURE_FLAG_DEFAULTS: WorkflowSdkFeatureFlags = {
@@ -21,6 +23,7 @@ export const WORKFLOW_SDK_FEATURE_FLAG_DEFAULTS: WorkflowSdkFeatureFlags = {
   realOboEnabled: false,
   authV1ResourceServerEnabled: false,
   writeEnabled: false,
+  oboReadCanaryEnabled: false,
 } as const;
 
 const ENV_KEY_MAP: Record<keyof WorkflowSdkFeatureFlags, string> = {
@@ -28,6 +31,7 @@ const ENV_KEY_MAP: Record<keyof WorkflowSdkFeatureFlags, string> = {
   realOboEnabled: 'ADC_WORKFLOW_REAL_OBO_ENABLED',
   authV1ResourceServerEnabled: 'ADC_AUTH_V1_RESOURCE_SERVER_ENABLED',
   writeEnabled: 'ADC_WORKFLOW_WRITE_ENABLED',
+  oboReadCanaryEnabled: 'ADC_WORKFLOW_OBO_READ_CANARY_ENABLED',
 };
 
 /**
