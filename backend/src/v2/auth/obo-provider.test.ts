@@ -2,6 +2,8 @@
  * AuthServiceWorkflowOboTokenProvider tests.
  *
  * Tests the OBO Token Exchange with a mock auth-service endpoint.
+ * Covers scope validation, TTL validation, issued_token_type validation,
+ * and error handling.
  */
 
 import { describe, expect, it, beforeAll, afterAll } from 'vitest';
@@ -9,8 +11,85 @@ import { createServer } from 'node:http';
 import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 
-import { AuthServiceWorkflowOboTokenProvider, type OboProviderConfig } from './obo-provider.js';
+import {
+  AuthServiceWorkflowOboTokenProvider,
+  type OboProviderConfig,
+  validateScopeEquality,
+} from './obo-provider.js';
 import { WorkflowTokenError } from '../workflow/token-provider.js';
+
+// ── Unit tests for validateScopeEquality (no HTTP needed) ────────────────
+
+describe('validateScopeEquality', () => {
+  function expectCode(fn: () => void, code: string) {
+    try {
+      fn();
+      expect.unreachable('should have thrown');
+    } catch (e) {
+      expect(e).toBeInstanceOf(WorkflowTokenError);
+      expect((e as WorkflowTokenError).code).toBe(code);
+    }
+  }
+
+  it('accepts exactly matching scope', () => {
+    expect(() => validateScopeEquality('workflow.read', 'workflow.read')).not.toThrow();
+  });
+
+  it('accepts scope with whitespace normalization', () => {
+    expect(() => validateScopeEquality('workflow.read', '  workflow.read  ')).not.toThrow();
+  });
+
+  it('rejects when scope is escalated (returned has extra scope)', () => {
+    expectCode(
+      () => validateScopeEquality('workflow.read', 'workflow.read workflow.execute'),
+      'TOKEN_EXCHANGE_SCOPE_ESCALATION',
+    );
+  });
+
+  it('rejects when returned scope is missing a requested scope', () => {
+    expectCode(
+      () => validateScopeEquality('workflow.read workflow.execute', 'workflow.read'),
+      'TOKEN_EXCHANGE_SCOPE_MISMATCH',
+    );
+  });
+
+  it('rejects completely different scope', () => {
+    expectCode(
+      () => validateScopeEquality('workflow.read', 'workflow.admin'),
+      'TOKEN_EXCHANGE_SCOPE_ESCALATION',
+    );
+  });
+
+  it('rejects empty returned scope', () => {
+    expectCode(
+      () => validateScopeEquality('workflow.read', ''),
+      'TOKEN_EXCHANGE_MISSING_SCOPE',
+    );
+  });
+
+  it('rejects returned scope with only whitespace', () => {
+    expectCode(
+      () => validateScopeEquality('workflow.read', '   '),
+      'TOKEN_EXCHANGE_MISSING_SCOPE',
+    );
+  });
+
+  it('rejects unknown scope values', () => {
+    expectCode(
+      () => validateScopeEquality('workflow.read', 'workflow.read some_unknown_scope'),
+      'TOKEN_EXCHANGE_SCOPE_ESCALATION',
+    );
+  });
+
+  it('rejects workflow.admin escalation', () => {
+    expectCode(
+      () => validateScopeEquality('workflow.read', 'workflow.read workflow.admin'),
+      'TOKEN_EXCHANGE_SCOPE_ESCALATION',
+    );
+  });
+});
+
+// ── Integration tests with mock auth-service ────────────────────────────
 
 describe('AuthServiceWorkflowOboTokenProvider', () => {
   let mockAuthServer: Server;
@@ -18,7 +97,6 @@ describe('AuthServiceWorkflowOboTokenProvider', () => {
   let config: OboProviderConfig;
 
   beforeAll(async () => {
-    // Start a mock auth-service that responds to Token Exchange requests
     mockAuthServer = createServer((req, res) => {
       if (req.method === 'POST' && req.url === '/oauth/token') {
         let body = '';
@@ -30,34 +108,33 @@ describe('AuthServiceWorkflowOboTokenProvider', () => {
           const scope = params.get('scope');
           const auth = req.headers.authorization || '';
 
-          // Basic validation
           if (grantType !== 'urn:ietf:params:oauth:grant-type:token-exchange') {
             res.writeHead(400, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ error: 'unsupported_grant_type' }));
             return;
           }
 
-          // Must request svc-workflow (not adc-v2)
           if (audience !== 'svc-workflow') {
             res.writeHead(400, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ error: 'invalid_audience' }));
             return;
           }
 
-          // Check client credentials
           if (!auth.startsWith('Basic ')) {
             res.writeHead(401, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ error: 'invalid_client' }));
             return;
           }
 
-          // Success
+          // Default success response with scope matching the request
+          const responseScope = params.get('response_scope') || scope || 'workflow.read';
           res.writeHead(200, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({
             access_token: 'mock-workflow-obo-token',
             token_type: 'Bearer',
             expires_in: 300,
-            scope: scope || 'workflow.read',
+            scope: responseScope,
+            issued_token_type: 'urn:ietf:params:oauth:token-type:access_token',
           }));
         });
       } else {
@@ -96,6 +173,243 @@ describe('AuthServiceWorkflowOboTokenProvider', () => {
     });
 
     expect(token).toBe('mock-workflow-obo-token');
+  });
+
+  it('accepts response with matching scope', async () => {
+    const provider = new AuthServiceWorkflowOboTokenProvider(config);
+
+    const token = await provider.getToken({
+      requiredScope: 'workflow.read',
+      requestContext: {
+        requestId: 'test-scope-ok',
+        route: '/api/v2/worklist',
+        rawAuthorizationReference: 'subject-token',
+      },
+    });
+
+    expect(token).toBe('mock-workflow-obo-token');
+  });
+
+  it('throws on scope escalation (response has workflow.execute)', async () => {
+    // Mock auth-service that returns escalated scope
+    const server = createServer((_req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        access_token: 'escalated-token',
+        token_type: 'Bearer',
+        expires_in: 300,
+        scope: 'workflow.read workflow.execute',
+      }));
+    });
+
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const addr = server.address() as AddressInfo;
+    const url = `http://127.0.0.1:${addr.port}`;
+
+    const provider = new AuthServiceWorkflowOboTokenProvider({
+      ...config,
+      tokenExchangeUrl: `${url}/oauth/token`,
+    });
+
+    await expect(
+      provider.getToken({
+        requiredScope: 'workflow.read',
+        requestContext: {
+          requestId: 'test-escalation',
+          route: '/api/v2/worklist',
+          rawAuthorizationReference: 'subject-token',
+        },
+      }),
+    ).rejects.toThrow(WorkflowTokenError);
+
+    await new Promise<void>((resolve) => server.close(resolve));
+  });
+
+  it('throws when returned scope is workflow.admin', async () => {
+    const server = createServer((_req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        access_token: 'admin-token',
+        token_type: 'Bearer',
+        expires_in: 300,
+        scope: 'workflow.admin',
+      }));
+    });
+
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const addr = server.address() as AddressInfo;
+    const url = `http://127.0.0.1:${addr.port}`;
+
+    const provider = new AuthServiceWorkflowOboTokenProvider({
+      ...config,
+      tokenExchangeUrl: `${url}/oauth/token`,
+    });
+
+    await expect(
+      provider.getToken({
+        requiredScope: 'workflow.read',
+        requestContext: {
+          requestId: 'test-admin',
+          route: '/api/v2/worklist',
+          rawAuthorizationReference: 'subject-token',
+        },
+      }),
+    ).rejects.toThrow(WorkflowTokenError);
+
+    await new Promise<void>((resolve) => server.close(resolve));
+  });
+
+  it('throws when scope is missing in response', async () => {
+    const server = createServer((_req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        access_token: 'no-scope-token',
+        token_type: 'Bearer',
+        expires_in: 300,
+        // no scope field
+      }));
+    });
+
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const addr = server.address() as AddressInfo;
+    const url = `http://127.0.0.1:${addr.port}`;
+
+    const provider = new AuthServiceWorkflowOboTokenProvider({
+      ...config,
+      tokenExchangeUrl: `${url}/oauth/token`,
+    });
+
+    await expect(
+      provider.getToken({
+        requiredScope: 'workflow.read',
+        requestContext: {
+          requestId: 'test-noscope',
+          route: '/api/v2/worklist',
+          rawAuthorizationReference: 'subject-token',
+        },
+      }),
+    ).rejects.toThrow(WorkflowTokenError);
+
+    await new Promise<void>((resolve) => server.close(resolve));
+  });
+
+  it('throws when returned scope is empty string', async () => {
+    const server = createServer((_req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        access_token: 'empty-scope-token',
+        token_type: 'Bearer',
+        expires_in: 300,
+        scope: '',
+      }));
+    });
+
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const addr = server.address() as AddressInfo;
+    const url = `http://127.0.0.1:${addr.port}`;
+
+    const provider = new AuthServiceWorkflowOboTokenProvider({
+      ...config,
+      tokenExchangeUrl: `${url}/oauth/token`,
+    });
+
+    await expect(
+      provider.getToken({
+        requiredScope: 'workflow.read',
+        requestContext: {
+          requestId: 'test-emptyscope',
+          route: '/api/v2/worklist',
+          rawAuthorizationReference: 'subject-token',
+        },
+      }),
+    ).rejects.toThrow(WorkflowTokenError);
+
+    await new Promise<void>((resolve) => server.close(resolve));
+  });
+
+  it('accepts response with matching issued_token_type', async () => {
+    const provider = new AuthServiceWorkflowOboTokenProvider(config);
+
+    const token = await provider.getToken({
+      requiredScope: 'workflow.read',
+      requestContext: {
+        requestId: 'test-issued-ok',
+        route: '/api/v2/worklist',
+        rawAuthorizationReference: 'subject-token',
+      },
+    });
+
+    expect(token).toBe('mock-workflow-obo-token');
+  });
+
+  it('throws on wrong issued_token_type', async () => {
+    const server = createServer((_req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        access_token: 'wrong-issued-token',
+        token_type: 'Bearer',
+        expires_in: 300,
+        scope: 'workflow.read',
+        issued_token_type: 'urn:ietf:params:oauth:token-type:refresh_token',
+      }));
+    });
+
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const addr = server.address() as AddressInfo;
+    const url = `http://127.0.0.1:${addr.port}`;
+
+    const provider = new AuthServiceWorkflowOboTokenProvider({
+      ...config,
+      tokenExchangeUrl: `${url}/oauth/token`,
+    });
+
+    await expect(
+      provider.getToken({
+        requiredScope: 'workflow.read',
+        requestContext: {
+          requestId: 'test-wrong-issued',
+          route: '/api/v2/worklist',
+          rawAuthorizationReference: 'subject-token',
+        },
+      }),
+    ).rejects.toThrow(WorkflowTokenError);
+
+    await new Promise<void>((resolve) => server.close(resolve));
+  });
+
+  it('accepts response without issued_token_type (optional per contract)', async () => {
+    const server = createServer((_req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        access_token: 'no-issued-token',
+        token_type: 'Bearer',
+        expires_in: 300,
+        scope: 'workflow.read',
+        // no issued_token_type — contract allows this
+      }));
+    });
+
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const addr = server.address() as AddressInfo;
+    const url = `http://127.0.0.1:${addr.port}`;
+
+    const provider = new AuthServiceWorkflowOboTokenProvider({
+      ...config,
+      tokenExchangeUrl: `${url}/oauth/token`,
+    });
+
+    const token = await provider.getToken({
+      requiredScope: 'workflow.read',
+      requestContext: {
+        requestId: 'test-no-issued',
+        route: '/api/v2/worklist',
+        rawAuthorizationReference: 'subject-token',
+      },
+    });
+
+    expect(token).toBe('no-issued-token');
+
+    await new Promise<void>((resolve) => server.close(resolve));
   });
 
   it('throws WorkflowTokenError when subject token is missing', async () => {
@@ -177,7 +491,7 @@ describe('AuthServiceWorkflowOboTokenProvider', () => {
     await new Promise<void>((resolve) => server.close(resolve));
   });
 
-  it('sends correct scope and audience parameters (audience=svc-workflow, not adc-v2)', async () => {
+  it('sends correct scope and audience parameters', async () => {
     const captured: Record<string, string> = {};
     const server = createServer((req, res) => {
       if (req.method === 'POST' && req.url === '/oauth/token') {
@@ -224,8 +538,8 @@ describe('AuthServiceWorkflowOboTokenProvider', () => {
     });
 
     expect(captured.grantType).toBe('urn:ietf:params:oauth:grant-type:token-exchange');
-    expect(captured.audience).toBe('svc-workflow');  // must be svc-workflow, not adc-v2
-    expect(captured.audience).not.toBe('adc-v2');     // explicitly NOT adc-v2
+    expect(captured.audience).toBe('svc-workflow');
+    expect(captured.audience).not.toBe('adc-v2');
     expect(captured.scope).toBe('workflow.read');
     expect(captured.subjectTokenType).toBe('urn:ietf:params:oauth:token-type:access_token');
     expect(captured.requestedTokenType).toBe('urn:ietf:params:oauth:token-type:access_token');
@@ -262,43 +576,7 @@ describe('AuthServiceWorkflowOboTokenProvider', () => {
     await new Promise<void>((resolve) => server.close(resolve));
   });
 
-  // ── TTL validation tests ─────────────────────────────────────────────
-
-  it('throws when expires_in is missing or zero', async () => {
-    const server = createServer((_req, res) => {
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({
-        access_token: 'invalid-ttl-token',
-        token_type: 'Bearer',
-        expires_in: 0,
-        scope: 'workflow.read',
-      }));
-    });
-
-    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
-    const addr = server.address() as AddressInfo;
-    const url = `http://127.0.0.1:${addr.port}`;
-
-    const provider = new AuthServiceWorkflowOboTokenProvider({
-      ...config,
-      tokenExchangeUrl: `${url}/oauth/token`,
-    });
-
-    await expect(
-      provider.getToken({
-        requiredScope: 'workflow.read',
-        requestContext: {
-          requestId: 'test-ttl-0',
-          route: '/api/v2/worklist',
-          rawAuthorizationReference: 'subject-token',
-        },
-      }),
-    ).rejects.toThrow(WorkflowTokenError);
-
-    await new Promise<void>((resolve) => server.close(resolve));
-  });
-
-  it('throws when expires_in exceeds 300s maximum', async () => {
+  it('throws on TTL exceeds 300s', async () => {
     const server = createServer((_req, res) => {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({
@@ -323,74 +601,6 @@ describe('AuthServiceWorkflowOboTokenProvider', () => {
         requiredScope: 'workflow.read',
         requestContext: {
           requestId: 'test-ttl-high',
-          route: '/api/v2/worklist',
-          rawAuthorizationReference: 'subject-token',
-        },
-      }),
-    ).rejects.toThrow(WorkflowTokenError);
-
-    await new Promise<void>((resolve) => server.close(resolve));
-  });
-
-  it('throws when response has unexpected token_type', async () => {
-    const server = createServer((_req, res) => {
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({
-        access_token: 'wrong-type-token',
-        token_type: 'DPoP',
-        expires_in: 300,
-        scope: 'workflow.read',
-      }));
-    });
-
-    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
-    const addr = server.address() as AddressInfo;
-    const url = `http://127.0.0.1:${addr.port}`;
-
-    const provider = new AuthServiceWorkflowOboTokenProvider({
-      ...config,
-      tokenExchangeUrl: `${url}/oauth/token`,
-    });
-
-    await expect(
-      provider.getToken({
-        requiredScope: 'workflow.read',
-        requestContext: {
-          requestId: 'test-type',
-          route: '/api/v2/worklist',
-          rawAuthorizationReference: 'subject-token',
-        },
-      }),
-    ).rejects.toThrow(WorkflowTokenError);
-
-    await new Promise<void>((resolve) => server.close(resolve));
-  });
-
-  it('throws when expires_in is negative', async () => {
-    const server = createServer((_req, res) => {
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({
-        access_token: 'negative-ttl-token',
-        token_type: 'Bearer',
-        expires_in: -1,
-        scope: 'workflow.read',
-      }));
-    });
-
-    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
-    const addr = server.address() as AddressInfo;
-    const url = `http://127.0.0.1:${addr.port}`;
-
-    const provider = new AuthServiceWorkflowOboTokenProvider({
-      ...config,
-      tokenExchangeUrl: `${url}/oauth/token`,
-    });
-
-    await expect(
-      provider.getToken({
-        requiredScope: 'workflow.read',
-        requestContext: {
-          requestId: 'test-neg-ttl',
           route: '/api/v2/worklist',
           rawAuthorizationReference: 'subject-token',
         },

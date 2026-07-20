@@ -19,6 +19,9 @@
 
 import { type WorkflowBearerTokenProvider, type WorkflowTokenProviderInput, WorkflowTokenError } from '../workflow/token-provider.js';
 
+/** Expected issued_token_type per RFC 8693 (contract provenance). */
+const EXPECTED_ISSUED_TOKEN_TYPE = 'urn:ietf:params:oauth:token-type:access_token';
+
 export interface OboProviderConfig {
   /** auth-service Token Exchange URL (e.g. http://127.0.0.1:4001/oauth/token). */
   readonly tokenExchangeUrl: string;
@@ -142,11 +145,92 @@ export class AuthServiceWorkflowOboTokenProvider implements WorkflowBearerTokenP
       );
     }
 
+    // Validate issued_token_type if present (per RFC 8693).
+    // The contract does not require this field, but if present it must match.
+    if (result.issued_token_type !== undefined) {
+      const issuedType = String(result.issued_token_type);
+      if (issuedType !== EXPECTED_ISSUED_TOKEN_TYPE) {
+        throw new WorkflowTokenError(
+          'TOKEN_EXCHANGE_UNEXPECTED_ISSUED_TOKEN_TYPE',
+          `Token Exchange returned unexpected issued_token_type: ${issuedType}`,
+        );
+      }
+    }
+
+    // Validate returned scope: exact match with requested scope.
+    // Per contract section 5.4, the returned scope must be the 3-way intersection.
+    // For V0 read-only canary, the only allowed scope is workflow.read.
+    // We enforce strict equality: returned set MUST equal requested set.
+    const returnedScope = result.scope;
+    if (typeof returnedScope !== 'string' || returnedScope.trim().length === 0) {
+      throw new WorkflowTokenError(
+        'TOKEN_EXCHANGE_MISSING_SCOPE',
+        'Token Exchange response missing or empty scope',
+      );
+    }
+    validateScopeEquality(scope, returnedScope);
+
     return {
       access_token: result.access_token,
       token_type: tokenType,
       expires_in: expiresIn,
-      scope: String(result.scope ?? scope),
+      scope: returnedScope,
     };
   }
+}
+
+/**
+ * Validate that the returned scope set exactly matches the requested scope set.
+ * Normalizes whitespace and ordering.
+ *
+ * @throws WorkflowTokenError on mismatch.
+ */
+export function validateScopeEquality(requested: string, returned: string): void {
+  const requestedSet = normalizeScopeSet(requested);
+  const returnedSet = normalizeScopeSet(returned);
+
+  if (requestedSet.size === 0) {
+    throw new WorkflowTokenError(
+      'TOKEN_EXCHANGE_MALFORMED_SCOPE',
+      'Requested scope is empty — cannot validate exchange response',
+    );
+  }
+
+  if (returnedSet.size === 0) {
+    throw new WorkflowTokenError(
+      'TOKEN_EXCHANGE_MISSING_SCOPE',
+      'Token Exchange response has empty scope',
+    );
+  }
+
+  // Reject scope escalation: returned must not contain any scope not in requested
+  for (const s of returnedSet) {
+    if (!requestedSet.has(s)) {
+      throw new WorkflowTokenError(
+        'TOKEN_EXCHANGE_SCOPE_ESCALATION',
+        `Token Exchange returned unexpected scope: ${s}`,
+      );
+    }
+  }
+
+  // Reject scope reduction: requested must not contain any scope not in returned
+  for (const s of requestedSet) {
+    if (!returnedSet.has(s)) {
+      throw new WorkflowTokenError(
+        'TOKEN_EXCHANGE_SCOPE_MISMATCH',
+        `Token Exchange is missing requested scope: ${s}`,
+      );
+    }
+  }
+
+  // If sets are equal, we pass.
+}
+
+/** Normalize a scope string into a sorted Set of individual scopes. */
+function normalizeScopeSet(scope: string): ReadonlySet<string> {
+  const scopes = scope
+    .split(/\s+/)
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+  return new Set(scopes);
 }
