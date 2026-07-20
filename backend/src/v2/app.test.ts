@@ -5,12 +5,6 @@ import { fileURLToPath } from 'node:url';
 import type { Server } from 'node:http';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import type {
-  CreateWorkflowInstanceInput,
-  ExecuteWorkflowTransitionInput,
-  WorkflowInstanceDetail,
-  WorkflowInstanceSummary,
-} from '../clients/svc-workflow/contracts.js';
 import { createV2App } from './app.js';
 import type { V2Config } from './config.js';
 import type { V2WorkflowGateway } from './svc-workflow/gateway.js';
@@ -36,9 +30,15 @@ const config: V2Config = {
     definitionVersionId: '22222222-2222-4222-8222-222222222222',
     definitionDigest: 'sha256:test-definition',
   }],
+  workflowFeatureFlags: {
+    sdkV1Enabled: false,
+    realOboEnabled: true, // enable for tests to allow direct bearer pass-through
+    authV1ResourceServerEnabled: false,
+    writeEnabled: true, // enable write for create/transition tests
+  },
 };
 
-const summary: WorkflowInstanceSummary = {
+const summary = {
   workflowInstanceId: INSTANCE_ID,
   domainId: config.definitionBindings[0].domainId,
   definitionVersionId: config.definitionBindings[0].definitionVersionId,
@@ -59,8 +59,8 @@ const summary: WorkflowInstanceSummary = {
   },
 };
 
-const detail: WorkflowInstanceDetail = {
-  visibility: 'full',
+const detail = {
+  visibility: 'full' as const,
   detail: {
     instance: summary,
     currentContextRevisionId: CONTEXT_ID,
@@ -185,12 +185,13 @@ describe('ADC V2 no-authority adapter', () => {
     expect(await response.json()).toMatchObject({ workflowInstanceId: INSTANCE_ID });
     expect(seenTokens).toEqual(['subject-agent-token']);
     expect(gateway.create).toHaveBeenCalledTimes(1);
+
     const [input, idempotencyKey] = vi.mocked(gateway.create).mock.calls[0] as [
-      CreateWorkflowInstanceInput,
+      Record<string, unknown>,
       string,
     ];
     expect(idempotencyKey).toBe('adc-v2-create-test-1');
-    expect(input).toEqual({
+    expect(input).toMatchObject({
       domainId: config.definitionBindings[0].domainId,
       definitionVersionId: config.definitionBindings[0].definitionVersionId,
       metadata: {
@@ -291,7 +292,7 @@ describe('ADC V2 no-authority adapter', () => {
     expect(transitionResponse.status).toBe(200);
     const [id, input, key] = vi.mocked(gateway.transition).mock.calls[0] as [
       string,
-      ExecuteWorkflowTransitionInput,
+      Record<string, unknown>,
       string,
     ];
     expect({ id, input, key }).toEqual({
@@ -348,4 +349,105 @@ describe('ADC V2 no-authority adapter', () => {
       expect(contents, relativeName).not.toMatch(/@prisma|lib\/prisma|routes\/requirements|config\/env/);
     }
   });
+
+  it('rejects write operations when writeEnabled=false', async () => {
+    const writeDisabledConfig: V2Config = {
+      ...config,
+      workflowFeatureFlags: {
+        ...config.workflowFeatureFlags,
+        writeEnabled: false,
+      },
+    };
+    const writeDisabledGateway = mockGateway();
+    const { baseUrl } = await serveWithConfig(writeDisabledConfig, writeDisabledGateway);
+
+    // Create should be rejected
+    const createResponse = await fetch(`${baseUrl}/api/v2/workflow-instances`, {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer subject-agent-token',
+        'content-type': 'application/json',
+        'idempotency-key': 'test',
+      },
+      body: JSON.stringify({
+        scenarioKey: 'development-delivery',
+        title: 'Write disabled test',
+        description: 'Should fail',
+        acceptanceCriteria: ['Blocked'],
+        references: [],
+      }),
+    });
+    expect(createResponse.status).toBe(503);
+    expect(writeDisabledGateway.create).not.toHaveBeenCalled();
+
+    // Transition should be rejected
+    const transitionResponse = await fetch(
+      `${baseUrl}/api/v2/workflow-instances/${INSTANCE_ID}/transitions`,
+      {
+        method: 'POST',
+        headers: {
+          authorization: 'Bearer subject-agent-token',
+          'content-type': 'application/json',
+          'idempotency-key': 'test',
+        },
+        body: JSON.stringify({
+          transitionDefinitionId: TRANSITION_ID,
+          expectedWorkflowStateVersion: 1,
+        }),
+      },
+    );
+    expect(transitionResponse.status).toBe(503);
+    expect(writeDisabledGateway.transition).not.toHaveBeenCalled();
+  });
+
+  it('allows read operations when writeEnabled=false', async () => {
+    const readOnlyConfig: V2Config = {
+      ...config,
+      workflowFeatureFlags: {
+        ...config.workflowFeatureFlags,
+        writeEnabled: false,
+      },
+    };
+    const readOnlyGateway = mockGateway();
+    const { baseUrl } = await serveWithConfig(readOnlyConfig, readOnlyGateway);
+
+    // Detail should work
+    const detailResponse = await fetch(
+      `${baseUrl}/api/v2/workflow-instances/${INSTANCE_ID}`,
+      { headers: { authorization: 'Bearer subject-agent-token' } },
+    );
+    expect(detailResponse.status).toBe(200);
+
+    // Timeline should work
+    const timelineResponse = await fetch(
+      `${baseUrl}/api/v2/workflow-instances/${INSTANCE_ID}/timeline`,
+      { headers: { authorization: 'Bearer subject-agent-token' } },
+    );
+    expect(timelineResponse.status).toBe(200);
+
+    // Worklist should work
+    const worklistResponse = await fetch(
+      `${baseUrl}/api/v2/worklist?kind=assigned`,
+      { headers: { authorization: 'Bearer subject-agent-token' } },
+    );
+    expect(worklistResponse.status).toBe(200);
+  });
 });
+
+/** Helper to serve with a custom config + gateway. */
+async function serveWithConfig(customConfig: V2Config, gateway: V2WorkflowGateway) {
+  const seenTokens: string[] = [];
+  const app = createV2App({
+    config: customConfig,
+    gatewayFactory(token) {
+      seenTokens.push(token);
+      return gateway;
+    },
+  });
+  const server = app.listen(0, '127.0.0.1');
+  servers.push(server);
+  await new Promise<void>((resolve) => server.once('listening', resolve));
+  const address = server.address();
+  if (!address || typeof address === 'string') throw new Error('test server has no TCP address');
+  return { baseUrl: `http://127.0.0.1:${address.port}`, seenTokens };
+}
