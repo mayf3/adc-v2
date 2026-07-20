@@ -28,6 +28,20 @@ export interface V2Config {
   readonly definitionBindings: readonly V2DefinitionBinding[];
   /** Workflow SDK feature flags (all default-off, fail-closed). */
   readonly workflowFeatureFlags: WorkflowSdkFeatureFlags;
+  /** Auth V1: auth-service base URL. */
+  readonly authServiceBaseUrl: string;
+  /** Auth V1: expected JWT issuer. */
+  readonly authJwtIssuer: string;
+  /** Auth V1: expected audience for ADC tokens. */
+  readonly authAdcAudience: string;
+  /** Auth V1: JWKS cache TTL in ms. */
+  readonly authJwksCacheTtlMs: number;
+  /** OBO: ADC OAuth Client ID. */
+  readonly oboClientId: string;
+  /** OBO: ADC OAuth Client Secret. */
+  readonly oboClientSecret: string;
+  /** OBO: Token Exchange timeout in ms. */
+  readonly oboRequestTimeoutMs: number;
 }
 
 const sourceSchema = z.object({
@@ -38,6 +52,17 @@ const sourceSchema = z.object({
   SVC_WORKFLOW_BASE_URL: z.string().url().default('http://127.0.0.1:8989'),
   SVC_WORKFLOW_REQUEST_TIMEOUT_MS: z.coerce.number().int().positive().default(35_000),
   SVC_WORKFLOW_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(3).default(3),
+
+  // Auth V1 Resource Server
+  ADC_AUTH_SERVICE_BASE_URL: z.string().url().default('http://127.0.0.1:4001'),
+  ADC_AUTH_JWT_ISSUER: z.string().default('auth-service'),
+  ADC_AUTH_ADC_AUDIENCE: z.string().default('svc-workflow'),
+  ADC_AUTH_JWKS_CACHE_TTL_MS: z.coerce.number().int().positive().default(300_000),
+
+  // OBO Token Exchange
+  ADC_OBO_CLIENT_ID: z.string().default(''),
+  ADC_OBO_CLIENT_SECRET: z.string().default(''),
+  ADC_OBO_REQUEST_TIMEOUT_MS: z.coerce.number().int().positive().default(10_000),
 });
 
 export function loadV2Config(source: NodeJS.ProcessEnv = process.env): V2Config {
@@ -81,5 +106,12 @@ export function loadV2Config(source: NodeJS.ProcessEnv = process.env): V2Config 
     svcWorkflowMaxAttempts: parsed.SVC_WORKFLOW_MAX_ATTEMPTS,
     definitionBindings,
     workflowFeatureFlags,
+    authServiceBaseUrl: parsed.ADC_AUTH_SERVICE_BASE_URL,
+    authJwtIssuer: parsed.ADC_AUTH_JWT_ISSUER,
+    authAdcAudience: parsed.ADC_AUTH_ADC_AUDIENCE,
+    authJwksCacheTtlMs: parsed.ADC_AUTH_JWKS_CACHE_TTL_MS,
+    oboClientId: parsed.ADC_OBO_CLIENT_ID,
+    oboClientSecret: parsed.ADC_OBO_CLIENT_SECRET,
+    oboRequestTimeoutMs: parsed.ADC_OBO_REQUEST_TIMEOUT_MS,
   };
 }

@@ -13,6 +13,9 @@ import { ZodError } from 'zod';
 import { WorkflowError } from '@workflow-foundation/sdk';
 
 import { bearerFromRequest } from './auth/request-principal.js';
+import { getVerifiedContext } from './auth/authenticated-request.js';
+import { createResourceServerMiddleware, requireAuth } from './auth/resource-server.js';
+import { createJwkSet } from './auth/jwk-cache.js';
 import type { V2Config } from './config.js';
 import { DefinitionBindingRegistry } from './definitions/bindings.js';
 import {
@@ -65,6 +68,25 @@ export function createV2App(dependencies: V2AppDependencies) {
   }));
   app.use(express.json({ limit: '2mb' }));
 
+  // ── Auth V1 Resource Server middleware (gated by feature flag) ──────────
+  let authMiddleware: RequestHandler | null = null;
+  if (config.workflowFeatureFlags.authV1ResourceServerEnabled) {
+    const jwks = createJwkSet({
+      jwksUrl: `${config.authServiceBaseUrl.replace(/\/+$/, '')}/.well-known/jwks.json`,
+      cacheTtlMs: config.authJwksCacheTtlMs,
+    });
+    authMiddleware = createResourceServerMiddleware({
+      jwks,
+      expectedIssuer: config.authJwtIssuer,
+      expectedAudience: config.authAdcAudience,
+      requiredTokenUse: 'access',
+      requiredPrincipalType: 'agent',
+      requiredScopes: ['adc.read'],
+    });
+  }
+
+  // ── Public routes (no auth required) ────────────────────────────────────
+
   app.get('/api/v2/health', asyncHandler(async (_req, res) => {
     await gatewayFactory('health-probe-not-used').assertReady();
     res.json({ status: 'ready', authority: 'svc-workflow', localBusinessDatabase: false });
@@ -76,8 +98,10 @@ export function createV2App(dependencies: V2AppDependencies) {
     });
   }));
 
-  app.get('/api/v2/worklist', asyncHandler(async (req, res) => {
-    const token = bearerFromRequest(req);
+  // ── Authenticated routes ────────────────────────────────────────────────
+
+  app.get('/api/v2/worklist', authMiddleware ?? asyncHandler(bearerFallback), asyncHandler(async (req, res) => {
+    const token = resolveToken(req);
     const query = worklistQuerySchema.parse(req.query);
     const worklist = await (query.kind === 'assigned'
       ? gatewayFactory(token).assignedToMe({ cursor: query.cursor, limit: query.limit })
@@ -88,13 +112,13 @@ export function createV2App(dependencies: V2AppDependencies) {
     });
   }));
 
-  app.post('/api/v2/workflow-instances', asyncHandler(async (req, res) => {
+  app.post('/api/v2/workflow-instances', authMiddleware ?? asyncHandler(bearerFallback), asyncHandler(async (req, res) => {
     // Write gating: fail-closed before any SDK call
     if (!config.workflowFeatureFlags.writeEnabled) {
       throw new V2HttpError(503, 'ADC_WORKFLOW_WRITE_DISABLED', 'Workflow write operations are disabled');
     }
 
-    const token = bearerFromRequest(req);
+    const token = resolveToken(req);
     const idempotencyKey = parseIdempotencyKey(req.get('idempotency-key'));
     const body = createWorkflowSchema.parse(req.body);
     const binding = bindings.resolve(body.scenarioKey);
@@ -123,26 +147,26 @@ export function createV2App(dependencies: V2AppDependencies) {
     res.status(201).json(result);
   }));
 
-  app.get('/api/v2/workflow-instances/:workflowInstanceId', asyncHandler(async (req, res) => {
-    const token = bearerFromRequest(req);
+  app.get('/api/v2/workflow-instances/:workflowInstanceId', authMiddleware ?? asyncHandler(bearerFallback), asyncHandler(async (req, res) => {
+    const token = resolveToken(req);
     const workflowInstanceId = workflowInstanceIdSchema.parse(req.params.workflowInstanceId);
     res.json(await gatewayFactory(token).detail(workflowInstanceId));
   }));
 
-  app.get('/api/v2/workflow-instances/:workflowInstanceId/timeline', asyncHandler(async (req, res) => {
-    const token = bearerFromRequest(req);
+  app.get('/api/v2/workflow-instances/:workflowInstanceId/timeline', authMiddleware ?? asyncHandler(bearerFallback), asyncHandler(async (req, res) => {
+    const token = resolveToken(req);
     const workflowInstanceId = workflowInstanceIdSchema.parse(req.params.workflowInstanceId);
     const query = timelineQuerySchema.parse(req.query);
     res.json(await gatewayFactory(token).timeline(workflowInstanceId, query));
   }));
 
-  app.post('/api/v2/workflow-instances/:workflowInstanceId/transitions', asyncHandler(async (req, res) => {
+  app.post('/api/v2/workflow-instances/:workflowInstanceId/transitions', authMiddleware ?? asyncHandler(bearerFallback), asyncHandler(async (req, res) => {
     // Write gating: fail-closed before any SDK call
     if (!config.workflowFeatureFlags.writeEnabled) {
       throw new V2HttpError(503, 'ADC_WORKFLOW_WRITE_DISABLED', 'Workflow write operations are disabled');
     }
 
-    const token = bearerFromRequest(req);
+    const token = resolveToken(req);
     const workflowInstanceId = workflowInstanceIdSchema.parse(req.params.workflowInstanceId);
     const idempotencyKey = parseIdempotencyKey(req.get('idempotency-key'));
     const body = transitionWorkflowSchema.parse(req.body);
@@ -155,6 +179,25 @@ export function createV2App(dependencies: V2AppDependencies) {
   app.use(errorHandler(config, requestIds));
   return app;
 }
+
+/**
+ * Resolve the bearer token for a request.
+ * When Auth V1 is active, uses the verified opaque subject token.
+ * Otherwise, falls back to extracting from the Authorization header.
+ */
+function resolveToken(req: Request): string {
+  const ctx = getVerifiedContext(req);
+  if (ctx) {
+    return ctx.opaqueSubjectToken;
+  }
+  return bearerFromRequest(req);
+}
+
+/**
+ * Fallback handler for when Auth V1 middleware is not active.
+ * Simply calls next() — the resolver will use bearerFromRequest.
+ */
+const bearerFallback: RequestHandler = (_req, _res, next) => next();
 
 function errorHandler(config: V2Config, requestIds: WeakMap<Request, string>): ErrorRequestHandler {
   return (error: unknown, req: Request, res: Response, _next: NextFunction) => {

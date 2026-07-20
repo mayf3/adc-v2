@@ -12,6 +12,7 @@ import { WorkflowError, type JsonValue } from '@workflow-foundation/sdk';
 import type { WorkflowClient } from '@workflow-foundation/sdk';
 
 import { V2HttpError } from '../schemas.js';
+import { AuthServiceWorkflowOboTokenProvider } from '../auth/obo-provider.js';
 import { createSdkClient } from '../workflow/client-factory.js';
 import {
   type WorkflowBearerTokenProvider,
@@ -84,22 +85,60 @@ export function createV2WorkflowGatewayFactory(config: {
   svcWorkflowBaseUrl: string;
   svcWorkflowRequestTimeoutMs: number;
   svcWorkflowMaxAttempts: number;
-  workflowFeatureFlags: { realOboEnabled: boolean };
+  workflowFeatureFlags: {
+    realOboEnabled: boolean;
+    authV1ResourceServerEnabled: boolean;
+    oboReadCanaryEnabled: boolean;
+    writeEnabled: boolean;
+  };
+  authServiceBaseUrl: string;
+  oboClientId: string;
+  oboClientSecret: string;
+  oboRequestTimeoutMs: number;
 }): V2WorkflowGatewayFactory {
+  // Pre-build the real OBO provider if all conditions are satisfied.
+  // Conditions (all must be true):
+  //   1. realOboEnabled — master switch for OBO
+  //   2. authV1ResourceServerEnabled — we can trust inbound tokens
+  //   3. oboReadCanaryEnabled — read canary is active
+  //   4. oboClientId is non-empty — credentials are configured
+  const oboReady =
+    config.workflowFeatureFlags.realOboEnabled &&
+    config.workflowFeatureFlags.authV1ResourceServerEnabled &&
+    config.workflowFeatureFlags.oboReadCanaryEnabled &&
+    config.oboClientId.length > 0;
+
+  const realOboProvider = oboReady
+    ? new AuthServiceWorkflowOboTokenProvider({
+        tokenExchangeUrl: `${config.authServiceBaseUrl.replace(/\/+$/, '')}/oauth/token`,
+        clientId: config.oboClientId,
+        clientSecret: config.oboClientSecret,
+        requestTimeoutMs: config.oboRequestTimeoutMs,
+      })
+    : null;
+
   return (accessToken: string) => {
     // Determine the token provider for this request.
-    // REAL_OBO_PROVIDER_IMPLEMENTED=false — no production OBO provider exists.
     //
-    // realOboEnabled=false → DisabledWorkflowTokenProvider (fail-closed).
-    // realOboEnabled=true  → UpstreamBlockedTokenProvider (fail-closed with
-    //                        clear "upstream not ready" error).
+    // Priority:
+    //   1. Real OBO provider (all conditions met)        → AuthServiceWorkflowOboTokenProvider
+    //   2. OBO enabled but conditions not met             → UpstreamBlockedTokenProvider
+    //   3. OBO disabled                                   → DisabledWorkflowTokenProvider
     //
-    // Both paths are fail-closed.  No path selects DeprecatedDirectBearerProvider
-    // (which would forward the inbound Authorization token to svc-workflow).
-    const tokenProvider: WorkflowBearerTokenProvider =
-      config.workflowFeatureFlags.realOboEnabled
-        ? new UpstreamBlockedTokenProvider()
-        : new DisabledWorkflowTokenProvider();
+    // No path selects DeprecatedDirectBearerProvider.
+    let tokenProvider: WorkflowBearerTokenProvider;
+
+    if (realOboProvider && config.workflowFeatureFlags.writeEnabled) {
+      // Write operations use the OBO provider with workflow.execute scope
+      // (but write gating in app.ts rejects before reaching here when disabled)
+      tokenProvider = realOboProvider;
+    } else if (realOboProvider) {
+      tokenProvider = realOboProvider;
+    } else if (config.workflowFeatureFlags.realOboEnabled) {
+      tokenProvider = new UpstreamBlockedTokenProvider();
+    } else {
+      tokenProvider = new DisabledWorkflowTokenProvider();
+    }
 
     const scope: WorkflowScope = 'workflow.read';
 
