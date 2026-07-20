@@ -92,6 +92,7 @@ export function createV2WorkflowGatewayFactory(config: {
     writeEnabled: boolean;
   };
   authServiceBaseUrl: string;
+  oboTargetAudience: string;
   oboClientId: string;
   oboClientSecret: string;
   oboRequestTimeoutMs: number;
@@ -113,6 +114,7 @@ export function createV2WorkflowGatewayFactory(config: {
         tokenExchangeUrl: `${config.authServiceBaseUrl.replace(/\/+$/, '')}/oauth/token`,
         clientId: config.oboClientId,
         clientSecret: config.oboClientSecret,
+        targetAudience: config.oboTargetAudience,
         requestTimeoutMs: config.oboRequestTimeoutMs,
       })
     : null;

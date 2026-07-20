@@ -26,6 +26,8 @@ export interface OboProviderConfig {
   readonly clientId: string;
   /** ADC OAuth Client Secret. */
   readonly clientSecret: string;
+  /** Target audience for the exchanged token (e.g. svc-workflow). */
+  readonly targetAudience: string;
   /** Request timeout in ms. */
   readonly requestTimeoutMs: number;
 }
@@ -66,7 +68,7 @@ export class AuthServiceWorkflowOboTokenProvider implements WorkflowBearerTokenP
       subject_token: subjectToken,
       subject_token_type: 'urn:ietf:params:oauth:token-type:access_token',
       requested_token_type: 'urn:ietf:params:oauth:token-type:access_token',
-      audience: 'svc-workflow',
+      audience: this.config.targetAudience,
       scope,
     });
 
@@ -118,10 +120,32 @@ export class AuthServiceWorkflowOboTokenProvider implements WorkflowBearerTokenP
       );
     }
 
+    const expiresIn = typeof result.expires_in === 'number' ? result.expires_in : 0;
+    if (expiresIn <= 0) {
+      throw new WorkflowTokenError(
+        'TOKEN_EXCHANGE_INVALID_TTL',
+        'Token Exchange returned invalid or missing expires_in',
+      );
+    }
+    if (expiresIn > 300) {
+      throw new WorkflowTokenError(
+        'TOKEN_EXCHANGE_TTL_EXCEEDS_MAX',
+        `Token Exchange TTL ${expiresIn}s exceeds maximum 300s`,
+      );
+    }
+
+    const tokenType = String(result.token_type ?? '');
+    if (tokenType !== 'Bearer') {
+      throw new WorkflowTokenError(
+        'TOKEN_EXCHANGE_UNEXPECTED_TOKEN_TYPE',
+        `Token Exchange returned unexpected token_type: ${tokenType}`,
+      );
+    }
+
     return {
       access_token: result.access_token,
-      token_type: String(result.token_type ?? 'Bearer'),
-      expires_in: typeof result.expires_in === 'number' ? result.expires_in : 0,
+      token_type: tokenType,
+      expires_in: expiresIn,
       scope: String(result.scope ?? scope),
     };
   }

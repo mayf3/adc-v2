@@ -78,7 +78,7 @@ export function createV2App(dependencies: V2AppDependencies) {
     authMiddleware = createResourceServerMiddleware({
       jwks,
       expectedIssuer: config.authJwtIssuer,
-      expectedAudience: config.authAdcAudience,
+      expectedAudience: config.authResourceServerAudience,
       requiredTokenUse: 'access',
       requiredPrincipalType: 'agent',
       requiredScopes: ['adc.read'],
