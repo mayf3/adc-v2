@@ -123,7 +123,9 @@ export interface AdcWorklistPage {
 export function adaptWorklistPage(raw: WorklistPage): AdcWorklistPage {
   return {
     items: raw.items,
-    nextCursor: raw.nextCursor,
+    nextCursor: raw.next_cursor
+      ? JSON.stringify({ created_at: raw.next_cursor.created_at, id: raw.next_cursor.id })
+      : null,
   };
 }
 
@@ -141,6 +143,8 @@ export interface AdcCreatorDraftPage {
 export function adaptCreatorDraftPage(raw: CreatorDraftPage): AdcCreatorDraftPage {
   return {
     items: raw.items,
-    nextCursor: raw.nextCursor,
+    nextCursor: raw.next_cursor
+      ? JSON.stringify({ created_at: raw.next_cursor.created_at, id: raw.next_cursor.id })
+      : null,
   };
 }
