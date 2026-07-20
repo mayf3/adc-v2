@@ -207,11 +207,11 @@ describe('adaptWorklistPage', () => {
           },
         },
       ],
-      nextCursor: 'cursor-abc',
+      next_cursor: { created_at: '2026-07-16T00:00:00.000Z', id: 'cursor-abc' },
     };
     const adapted = adaptWorklistPage(raw);
     expect(adapted.items).toHaveLength(1);
-    expect(adapted.nextCursor).toBe('cursor-abc');
+    expect(adapted.nextCursor).toBe(JSON.stringify({ created_at: '2026-07-16T00:00:00.000Z', id: 'cursor-abc' }));
   });
 
   it('handles null nextCursor', () => {
@@ -249,10 +249,10 @@ describe('adaptCreatorDraftPage', () => {
           },
         },
       ],
-      nextCursor: 'cursor-xyz',
+      next_cursor: { created_at: '2026-07-16T00:00:00.000Z', id: 'cursor-xyz' },
     };
     const adapted = adaptCreatorDraftPage(raw);
     expect(adapted.items).toHaveLength(1);
-    expect(adapted.nextCursor).toBe('cursor-xyz');
+    expect(adapted.nextCursor).toBe(JSON.stringify({ created_at: '2026-07-16T00:00:00.000Z', id: 'cursor-xyz' }));
   });
 });

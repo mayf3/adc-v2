@@ -8,7 +8,7 @@
  * and must not have production imports.
  */
 
-import { WorkflowError } from '@workflow-foundation/sdk';
+import { WorkflowError, type JsonValue } from '@workflow-foundation/sdk';
 import type { WorkflowClient } from '@workflow-foundation/sdk';
 
 import { V2HttpError } from '../schemas.js';
@@ -31,8 +31,8 @@ export interface V2WorkflowGateway {
       domainId: string;
       definitionVersionId: string;
       externalReference?: string;
-      metadata: Record<string, unknown>;
-      contextPayload: Record<string, unknown>;
+      metadata: Record<string, JsonValue>;
+      contextPayload: Record<string, JsonValue>;
     },
     idempotencyKey: string,
   ): Promise<{
@@ -48,7 +48,7 @@ export interface V2WorkflowGateway {
     input: {
       transitionDefinitionId: string;
       expectedWorkflowStateVersion: number;
-      submissionPayload?: Record<string, unknown>;
+      submissionPayload?: JsonValue;
     },
     idempotencyKey: string,
   ): Promise<{
@@ -166,7 +166,9 @@ function createGatewayFromClient(client: WorkflowClient): V2WorkflowGateway {
           {
             transitionDefinitionId: input.transitionDefinitionId,
             expectedWorkflowStateVersion: input.expectedWorkflowStateVersion,
-            submissionPayload: input.submissionPayload,
+            // Narrow ADC's JsonValue to SDK's Record<string, JsonValue>.
+            // The SDK's own Zod schema validates the final payload.
+            submissionPayload: input.submissionPayload as Record<string, JsonValue> | undefined,
           },
           { idempotencyKey },
         );
@@ -198,10 +200,12 @@ function createGatewayFromClient(client: WorkflowClient): V2WorkflowGateway {
 
     assignedToMe: async (query) => {
       try {
-        const result = await client.worklistAssignedToMe(query);
+        const result = await client.worklistAssignedToMe(
+          query ? toSdkWorklistQuery(query) : undefined,
+        );
         return {
           items: result.items,
-          nextCursor: result.nextCursor,
+          nextCursor: toAdcCursor(result.next_cursor),
         };
       } catch (error) {
         throw toV2HttpError(error);
@@ -210,16 +214,60 @@ function createGatewayFromClient(client: WorkflowClient): V2WorkflowGateway {
 
     creatorOwnedDrafts: async (query) => {
       try {
-        const result = await client.worklistCreatorOwnedDrafts(query);
+        const result = await client.worklistCreatorOwnedDrafts(
+          query ? toSdkWorklistQuery(query) : undefined,
+        );
         return {
           items: result.items,
-          nextCursor: result.nextCursor,
+          nextCursor: toAdcCursor(result.next_cursor),
         };
       } catch (error) {
         throw toV2HttpError(error);
       }
     },
   };
+}
+
+// ---------------------------------------------------------------------------
+// Cursor bridging — ADC string cursor ↔ SDK structured cursor
+// ---------------------------------------------------------------------------
+
+interface SdkWorklistQuery {
+  readonly beforeCreatedAt?: string;
+  readonly beforeId?: string;
+  readonly limit?: number;
+}
+
+interface SdkCursor {
+  readonly created_at: string;
+  readonly id: string;
+}
+
+/** Convert ADC's string cursor + limit to SDK's { beforeCreatedAt, beforeId, limit }. */
+function toSdkWorklistQuery(adcQuery: {
+  cursor?: string;
+  limit?: number;
+}): SdkWorklistQuery {
+  if (!adcQuery.cursor) {
+    return { limit: adcQuery.limit };
+  }
+  try {
+    const parsed = JSON.parse(adcQuery.cursor) as Record<string, string>;
+    return {
+      beforeCreatedAt: parsed.created_at ?? parsed.beforeCreatedAt,
+      beforeId: parsed.id ?? parsed.beforeId,
+      limit: adcQuery.limit,
+    };
+  } catch {
+    // If cursor is not valid JSON, pass it as beforeId for backward compatibility
+    return { beforeId: adcQuery.cursor, limit: adcQuery.limit };
+  }
+}
+
+/** Convert SDK's cursor object to ADC's string cursor. */
+function toAdcCursor(sdkCursor: SdkCursor | null): string | null {
+  if (!sdkCursor) return null;
+  return JSON.stringify({ created_at: sdkCursor.created_at, id: sdkCursor.id });
 }
 
 // ---------------------------------------------------------------------------
