@@ -16,7 +16,7 @@ import { validateAdcPayload, VerifyJwtError } from './verify-jwt.js';
 const VALID_PAYLOAD: JWTPayload = {
   sub: '11111111-1111-4111-8111-111111111111',
   iss: 'auth-service',
-  aud: 'svc-workflow',
+  aud: 'adc-v2',
   token_use: 'access',
   principal_type: 'agent',
   scope: 'adc.read svc-workflow.read',
