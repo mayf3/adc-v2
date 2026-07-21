@@ -1,0 +1,26 @@
+{
+  "schema": "adc-auth-contract-provenance-manifest-v1",
+  "source_repository": "ssh://root@8.163.44.127/opt/git/auth-service.git",
+  "source_head": "c935528019c29480ac9a2eb1d7e5dfb81bd8a469",
+  "source_tree": "cf0780b3d50f93bbea9574cf43ad8329fe4f4dd4",
+  "contracts": [
+    {
+      "path": "ADC_SVC_WORKFLOW_OBO_JWKS_IMPLEMENTATION_CONTRACT.md",
+      "git_blob_id": "41f48343fde71ad0b8c5ac750259ca2418508406",
+      "file_sha256": "d7319e1e1055b5640e3df3ef758313c002fc347864c92444fd973f5875f4625a",
+      "covers": ["rfc8693_token_exchange", "workflow_obo"]
+    },
+    {
+      "path": "docs/contracts/MACHINE_CLIENT_CREDENTIALS_V0.md",
+      "git_blob_id": "a4405e44132cc02c9505f839712c09ff386ea145",
+      "file_sha256": "d9f3fcf9078de80fc589a78dd5d2818338d86a1c8614859c291391c3795e9271",
+      "covers": ["machine_client_credentials"]
+    },
+    {
+      "path": "docs/contracts/WORKFLOW_RS256_MACHINE_TOKEN_JWKS_V0.md",
+      "git_blob_id": "7ad470edf0158a725148a3b1149b5a1cc79a8769",
+      "file_sha256": "cc68908fcd2d660eb6e78ceafec82641dc1d64cada87ab3ef299994083b084d2",
+      "covers": ["jwks_rs256", "direct_access_token"]
+    }
+  ]
+}
