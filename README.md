@@ -4,8 +4,8 @@
 
 | 路径 | 定位 |
 |---|---|
-| `/Users/yanfenma/workspace/project/agent-dev-center` | **ADC V1（RETIRED）** — 旧数据和旧功能来源，不再提供服务 |
-| `/Users/yanfenma/workspace/project/adc-v2` | **ADC V2** — 研发交付只读入口，当前正式项目 |
+| `../agent-dev-center` | **ADC V1（RETIRED）** — 旧数据和旧功能来源，不再提供服务 |
+| `.` | **ADC V2** — 研发交付只读入口，当前正式项目 |
 
 ## 产品边界
 
