@@ -1,6 +1,6 @@
 {
   "schema": "adc-auth-contract-provenance-manifest-v1",
-  "source_repository": "ssh://root@8.163.44.127/opt/git/auth-service.git",
+  "source_repository": "ssh://git@<GIT_SERVER>/opt/git/auth-service.git",
   "source_head": "c935528019c29480ac9a2eb1d7e5dfb81bd8a469",
   "source_tree": "cf0780b3d50f93bbea9574cf43ad8329fe4f4dd4",
   "contracts": [
